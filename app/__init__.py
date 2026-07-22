@@ -1,3 +1,3 @@
-"""Telegram bot for recognizing anime by screenshots."""
+"""Hybrid anime search Telegram bot."""
 
-__version__ = "1.0.0"
+__version__ = "2.0.0"

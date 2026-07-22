@@ -1,12 +1,17 @@
 from __future__ import annotations
 
 import html
-from typing import Any
 
-from app.models import TraceMatch
+from app.models import SearchHit
 
 
-def format_timestamp(seconds: float) -> str:
+def clamp_similarity(value: float | None) -> str:
+    if value is None:
+        return "не указано"
+    return f"{value * 100:.2f}%"
+
+
+def seconds_to_timestamp(seconds: float) -> str:
     total_seconds = max(0, int(seconds))
     hours, remainder = divmod(total_seconds, 3600)
     minutes, secs = divmod(remainder, 60)
@@ -15,57 +20,25 @@ def format_timestamp(seconds: float) -> str:
     return f"{minutes:02d}:{secs:02d}"
 
 
-def format_episode(value: Any) -> str:
-    if value is None:
-        return "не определён"
-    if isinstance(value, list):
-        return ", ".join(str(item) for item in value) or "не определён"
-    if isinstance(value, float) and value.is_integer():
-        return str(int(value))
-    return str(value)
-
-
-def build_result_caption(
-    match: TraceMatch,
-    position: int,
-    low_confidence: bool = False,
-) -> str:
-    primary = html.escape(match.titles.primary())
-    alternatives = [
-        html.escape(title) for title in match.titles.alternatives()[:2]
-    ]
-
+def format_hit_caption(hit: SearchHit, number: int) -> str:
     lines = [
-        f"<b>Результат №{position}</b>",
+        f"<b>Результат №{number}</b>",
         "",
-        f"🎞 <b>Аниме:</b> {primary}",
+        f"🧠 <b>Источник:</b> {html.escape(hit.engine)}",
+        f"🎞 <b>Название:</b> {html.escape(hit.title)}",
     ]
 
-    if alternatives:
-        lines.append(f"🔤 <b>Другие названия:</b> {' / '.join(alternatives)}")
-
-    lines.extend(
-        [
-            f"📺 <b>Эпизод:</b> {html.escape(format_episode(match.episode))}",
-            (
-                "⏱ <b>Таймкод:</b> "
-                f"{format_timestamp(match.time_from)}–"
-                f"{format_timestamp(match.time_to)}"
-            ),
-            f"🎯 <b>Сходство:</b> {match.similarity * 100:.2f}%",
-        ]
-    )
-
-    if match.is_adult:
-        lines.append("🔞 <b>Категория:</b> контент для взрослых")
-
-    if low_confidence:
-        lines.extend(
-            [
-                "",
-                "⚠️ Совпадение слабое. Попробуйте отправить кадр без "
-                "субтитров, рамок и интерфейса видеоплеера.",
-            ]
-        )
+    if hit.subtitle:
+        lines.append(f"👤 <b>Дополнительно:</b> {html.escape(hit.subtitle)}")
+    if hit.episode:
+        lines.append(f"📺 <b>Эпизод:</b> {html.escape(hit.episode)}")
+    if hit.timestamp:
+        lines.append(f"⏱ <b>Таймкод:</b> {html.escape(hit.timestamp)}")
+    if hit.similarity is not None:
+        lines.append(f"🎯 <b>Сходство:</b> {clamp_similarity(hit.similarity)}")
+    if hit.variant and hit.variant != "original":
+        lines.append(f"🖼 <b>Вариант кадра:</b> {html.escape(hit.variant)}")
+    if hit.note:
+        lines.append(f"ℹ️ <b>Примечание:</b> {html.escape(hit.note)}")
 
     return "\n".join(lines)

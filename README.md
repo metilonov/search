@@ -1,29 +1,33 @@
-# Telegram-бот для поиска аниме по фото
+# Anime Hybrid Bot
 
-Бот принимает кадр из аниме, отправляет его в бесплатный API
-trace.moe и показывает наиболее вероятные совпадения.
+Telegram-бот для поиска аниме по фото с гибридной логикой:
 
-## Возможности
+1. **trace.moe** — основной поиск точного кадра, серии и таймкода.
+2. **AnimeTrace** — дополнительный AI-поиск названия и персонажа.
+3. **SauceNAO** — поиск артов, постеров, похожих источников и ссылок.
 
-- приём изображения как фотографии или файла;
-- название на английском, ромадзи и японском;
-- номер эпизода;
-- примерный таймкод сцены;
-- процент сходства;
-- превью найденного кадра;
-- ссылка на AniList, MyAnimeList и видеофрагмент;
-- обработка ошибок и лимитов API;
-- защита от одновременных запросов одного пользователя;
-- запуск обычной командой или через Docker.
+Также бот умеет:
+- автоматически обрезать чёрные рамки;
+- пробовать зеркальный вариант изображения;
+- отправлять несколько результатов из разных движков;
+- работать через `.env`;
+- запускаться локально, на сервере и через Docker.
+
+---
 
 ## Структура
 
 ```text
-anime_photo_bot/
+anime_hybrid_bot/
 ├── app/
 │   ├── services/
 │   │   ├── __init__.py
-│   │   └── trace_moe.py
+│   │   ├── anime_trace.py
+│   │   ├── hybrid_search.py
+│   │   ├── preprocess.py
+│   │   ├── saucenao.py
+│   │   ├── trace_moe.py
+│   │   └── types.py
 │   ├── __init__.py
 │   ├── config.py
 │   ├── handlers.py
@@ -34,116 +38,127 @@ anime_photo_bot/
 ├── .env.example
 ├── .gitignore
 ├── Dockerfile
-├── docker-compose.yml
 ├── README.md
+├── docker-compose.yml
+├── main.py
 └── requirements.txt
 ```
 
-## Быстрый запуск
-
-Требуется Python 3.11 или новее.
+## Установка
 
 ```bash
 python -m venv .venv
-```
-
-Linux / macOS:
-
-```bash
 source .venv/bin/activate
-```
-
-Windows:
-
-```powershell
-.venv\Scripts\activate
-```
-
-Установите зависимости:
-
-```bash
 pip install -r requirements.txt
-```
-
-Создайте `.env`:
-
-Linux / macOS / Termux:
-
-```bash
 cp .env.example .env
 ```
 
-Windows:
-
-```powershell
-copy .env.example .env
-```
-
-Откройте `.env` и вставьте токен Telegram-бота:
+Заполните `.env`:
 
 ```env
-BOT_TOKEN=ВАШ_ТОКЕН_ОТ_BOTFATHER
+BOT_TOKEN=ВАШ_ТОКЕН
+TRACE_MOE_API_KEY=
+ANIME_TRACE_API_KEY=
+SAUCENAO_API_KEY=
 ```
 
-Запустите:
+## Запуск
+
+Вариант 1:
 
 ```bash
 python -m app.main
 ```
 
-## Запуск в Termux
+Вариант 2:
+
+```bash
+python main.py
+```
+
+## Команда запуска для сервера
+
+```bash
+python main.py
+```
+
+или
+
+```bash
+python -m app.main
+```
+
+## Что обязательно заполнить
+
+Обязательно:
+- `BOT_TOKEN`
+
+Можно оставить пустым:
+- `TRACE_MOE_API_KEY`
+- `ANIME_TRACE_API_KEY`
+- `SAUCENAO_API_KEY`
+
+## Переменные
+
+### trace.moe
+- `TRACE_CONFIDENT_SCORE=0.80` — если совпадение выше, поиск считается успешным.
+- `TRACE_MIN_SCORE=0.65` — минимальный порог показа результата.
+- `TRACE_MAX_RESULTS=3`
+
+### AnimeTrace
+- `ANIME_TRACE_ENABLED=true`
+- `ANIME_TRACE_API_URL=https://api.animedb.cn/v1/search`
+- `ANIME_TRACE_MODEL=`
+- `ANIME_TRACE_MIN_SCORE=0.55`
+
+### SauceNAO
+- `SAUCENAO_ENABLED=true`
+- `SAUCENAO_MIN_SCORE=0.60`
+- `SAUCENAO_NUM_RESULTS=3`
+
+### Автоварианты
+- `USE_AUTO_VARIANTS=true`
+
+## Как работает поиск
+
+1. Пользователь отправляет изображение.
+2. Бот создаёт варианты:
+   - оригинал;
+   - обрезанный кадр без чёрных рамок;
+   - зеркальный вариант.
+3. Бот запускает поиск через trace.moe.
+4. Если результат уверенный — показывает его и завершает поиск.
+5. Если уверенности не хватает — запускает AnimeTrace и SauceNAO.
+6. Пользователь получает лучшие совпадения из всех движков.
+
+## Важное замечание
+
+`trace.moe` стабильно подходит для кадров из аниме.
+`SauceNAO` часто лучше работает для артов, постеров и изображений персонажей.
+`AnimeTrace` API со временем может менять формат ответа, поэтому в проекте
+сделан гибкий парсер ответа, но при серьёзных изменениях API может потребоваться корректировка.
+
+## Termux
 
 ```bash
 pkg update
 pkg install python
-cd anime_photo_bot
+cd anime_hybrid_bot
 python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 cp .env.example .env
 nano .env
-python -m app.main
+python main.py
 ```
 
 ## Docker
-
-Создайте `.env`, затем выполните:
 
 ```bash
 docker compose up -d --build
 ```
 
-Просмотр журнала:
-
-```bash
-docker compose logs -f
-```
-
-## Настройки `.env`
-
-- `BOT_TOKEN` — обязательный токен от BotFather.
-- `TRACE_MOE_API_KEY` — необязательный ключ trace.moe.
-- `MIN_SIMILARITY` — минимальный процент уверенного совпадения.
-- `MAX_RESULTS` — число результатов от 1 до 5.
-- `REQUEST_TIMEOUT` — тайм-аут API в секундах.
-- `MAX_IMAGE_SIZE_MB` — максимальный размер изображения.
-- `DROP_PENDING_UPDATES` — удалять ли старые обновления при запуске.
-
-## Советы для точного поиска
-
-Используйте кадр непосредственно из серии. Уберите:
-
-- чёрные рамки;
-- субтитры;
-- логотипы;
-- кнопки видеоплеера;
-- коллажи и обрезанные лица.
-
-trace.moe лучше ищет кадры из выпущенных аниме-сериалов и фильмов.
-Манга, арты, постеры, фан-арт и изображения персонажей могут не найтись.
-
 ## Безопасность
 
-Никогда не публикуйте файл `.env` и токен Telegram-бота в GitHub.
-Если токен попал в открытый доступ, отзовите его через BotFather и
-создайте новый.
+Не загружайте `.env` в GitHub.
+Если токен бота утёк — отзовите его через @BotFather и создайте новый.

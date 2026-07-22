@@ -5,49 +5,30 @@ from typing import Any
 
 import aiohttp
 
-from app.models import TraceMatch
-
-
-class TraceMoeError(RuntimeError):
-    """Base trace.moe API error."""
-
-
-class TraceMoeBadImageError(TraceMoeError):
-    """The API could not process the supplied image."""
-
-
-class TraceMoeRateLimitError(TraceMoeError):
-    """The API quota or request limit was exceeded."""
-
-
-class TraceMoeTemporaryError(TraceMoeError):
-    """Temporary trace.moe service failure."""
+from app.models import SearchHit
+from app.services.types import SearchServiceError, TemporaryServiceError
+from app.utils import seconds_to_timestamp
 
 
 class TraceMoeClient:
-    SEARCH_URL = (
-        "https://api.trace.moe/search?anilistInfo&cutBorders"
-    )
+    SEARCH_URL = "https://api.trace.moe/search?anilistInfo&cutBorders"
 
     def __init__(
         self,
         session: aiohttp.ClientSession,
         api_key: str | None = None,
-        concurrency: int = 2,
     ) -> None:
         self._session = session
         self._api_key = api_key
-        self._semaphore = asyncio.Semaphore(concurrency)
 
     async def search(
         self,
         image: bytes,
-        filename: str = "image.jpg",
-        content_type: str = "image/jpeg",
-    ) -> list[TraceMatch]:
-        if not image:
-            raise TraceMoeBadImageError("Получен пустой файл.")
-
+        filename: str,
+        content_type: str,
+        variant_name: str = "original",
+        limit: int = 3,
+    ) -> list[SearchHit]:
         form = aiohttp.FormData()
         form.add_field(
             "image",
@@ -58,82 +39,102 @@ class TraceMoeClient:
 
         headers = {
             "Accept": "application/json",
-            "User-Agent": "AnimePhotoTelegramBot/1.0",
+            "User-Agent": "AnimeHybridBot/2.0",
         }
         if self._api_key:
             headers["x-trace-key"] = self._api_key
 
         try:
-            async with self._semaphore:
-                async with self._session.post(
-                    self.SEARCH_URL,
-                    data=form,
-                    headers=headers,
-                ) as response:
-                    payload = await self._read_json(response)
-                    self._raise_for_status(response.status, payload)
+            async with self._session.post(
+                self.SEARCH_URL,
+                data=form,
+                headers=headers,
+            ) as response:
+                payload = await self._read_json(response)
         except asyncio.TimeoutError as exc:
-            raise TraceMoeTemporaryError(
-                "Сервис не ответил вовремя."
-            ) from exc
+            raise TemporaryServiceError("trace.moe не ответил вовремя.") from exc
         except aiohttp.ClientError as exc:
-            raise TraceMoeTemporaryError(
-                "Не удалось подключиться к trace.moe."
-            ) from exc
+            raise TemporaryServiceError("Ошибка подключения к trace.moe.") from exc
 
-        raw_results = payload.get("result")
-        if not isinstance(raw_results, list):
-            raise TraceMoeTemporaryError(
-                "Сервис вернул ответ неизвестного формата."
-            )
+        if response.status in {402, 429}:
+            raise SearchServiceError("trace.moe временно ограничил запросы.")
+        if response.status >= 500:
+            raise TemporaryServiceError("trace.moe временно недоступен.")
+        if response.status >= 400:
+            raise SearchServiceError(str(payload.get("error") or "Ошибка trace.moe."))
 
-        matches: list[TraceMatch] = []
-        for item in raw_results:
+        raw_results = payload.get("result") or []
+        hits: list[SearchHit] = []
+
+        for item in raw_results[:limit]:
             if not isinstance(item, dict):
                 continue
-            try:
-                matches.append(TraceMatch.from_api(item))
-            except (TypeError, ValueError):
-                continue
 
-        matches.sort(key=lambda item: item.similarity, reverse=True)
-        return matches
+            anilist = item.get("anilist") or {}
+            if isinstance(anilist, dict):
+                title_data = anilist.get("title") or {}
+                title = (
+                    title_data.get("english")
+                    or title_data.get("romaji")
+                    or title_data.get("native")
+                    or "Название не найдено"
+                )
+                alt_parts = [
+                    value
+                    for value in (
+                        title_data.get("romaji"),
+                        title_data.get("native"),
+                    )
+                    if value and value != title
+                ]
+                subtitle = " / ".join(alt_parts) if alt_parts else None
+                anilist_id = anilist.get("id")
+                mal_id = anilist.get("idMal")
+            else:
+                title = "Название не найдено"
+                subtitle = None
+                anilist_id = None
+                mal_id = None
+
+            episode = item.get("episode")
+            if episode is not None:
+                episode = str(int(episode)) if isinstance(episode, float) and episode.is_integer() else str(episode)
+
+            time_from = float(item.get("from") or 0)
+            time_to = float(item.get("to") or 0)
+            timestamp = f"{seconds_to_timestamp(time_from)}–{seconds_to_timestamp(time_to)}"
+
+            links: list[tuple[str, str]] = []
+            if anilist_id:
+                links.append(("AniList", f"https://anilist.co/anime/{anilist_id}"))
+            if mal_id:
+                links.append(("MyAnimeList", f"https://myanimelist.net/anime/{mal_id}"))
+
+            hits.append(
+                SearchHit(
+                    engine="trace.moe",
+                    title=str(title),
+                    similarity=float(item.get("similarity") or 0),
+                    subtitle=subtitle,
+                    episode=episode,
+                    timestamp=timestamp,
+                    preview_image=str(item.get("image") or "") or None,
+                    preview_video=str(item.get("video") or "") or None,
+                    links=tuple(links),
+                    variant=variant_name,
+                )
+            )
+
+        return hits
 
     @staticmethod
-    async def _read_json(
-        response: aiohttp.ClientResponse,
-    ) -> dict[str, Any]:
+    async def _read_json(response: aiohttp.ClientResponse) -> dict[str, Any]:
         try:
             payload = await response.json(content_type=None)
-        except (aiohttp.ContentTypeError, ValueError) as exc:
+        except Exception as exc:
             body = (await response.text())[:300]
-            raise TraceMoeTemporaryError(
-                f"Некорректный ответ сервиса: {body}"
-            ) from exc
+            raise TemporaryServiceError(f"Некорректный ответ trace.moe: {body}") from exc
 
         if not isinstance(payload, dict):
-            raise TraceMoeTemporaryError(
-                "Сервис вернул не JSON-объект."
-            )
+            raise TemporaryServiceError("trace.moe вернул неизвестный формат.")
         return payload
-
-    @staticmethod
-    def _raise_for_status(
-        status: int,
-        payload: dict[str, Any],
-    ) -> None:
-        if status == 200:
-            api_error = payload.get("error")
-            if api_error:
-                raise TraceMoeError(str(api_error))
-            return
-
-        error_text = str(payload.get("error") or "Неизвестная ошибка")
-
-        if status == 400:
-            raise TraceMoeBadImageError(error_text)
-        if status in {402, 429}:
-            raise TraceMoeRateLimitError(error_text)
-        if status in {500, 502, 503, 504}:
-            raise TraceMoeTemporaryError(error_text)
-        raise TraceMoeError(f"trace.moe HTTP {status}: {error_text}")

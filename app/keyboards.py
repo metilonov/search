@@ -2,38 +2,27 @@ from __future__ import annotations
 
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
-from app.models import TraceMatch
+from app.models import SearchHit
 
 
-def result_keyboard(match: TraceMatch) -> InlineKeyboardMarkup:
+def hit_keyboard(hit: SearchHit) -> InlineKeyboardMarkup | None:
     rows: list[list[InlineKeyboardButton]] = []
 
-    if match.anilist_id:
-        rows.append(
-            [
-                InlineKeyboardButton(
-                    text="📚 Открыть в AniList",
-                    url=f"https://anilist.co/anime/{match.anilist_id}",
-                )
-            ]
-        )
+    if hit.links:
+        row: list[InlineKeyboardButton] = []
+        for text, url in hit.links[:3]:
+            row.append(InlineKeyboardButton(text=text, url=url))
+        if row:
+            rows.append(row)
 
-    secondary: list[InlineKeyboardButton] = []
-    if match.preview_video:
-        secondary.append(
-            InlineKeyboardButton(
-                text="🎬 Превью сцены",
-                url=match.preview_video,
-            )
+    extra: list[InlineKeyboardButton] = []
+    if hit.preview_video:
+        extra.append(
+            InlineKeyboardButton(text="🎬 Превью", url=hit.preview_video)
         )
-    if match.mal_id:
-        secondary.append(
-            InlineKeyboardButton(
-                text="MyAnimeList",
-                url=f"https://myanimelist.net/anime/{match.mal_id}",
-            )
-        )
-    if secondary:
-        rows.append(secondary)
+    if extra:
+        rows.append(extra)
 
+    if not rows:
+        return None
     return InlineKeyboardMarkup(inline_keyboard=rows)
